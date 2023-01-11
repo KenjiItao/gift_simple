@@ -9,118 +9,113 @@ import random
 from collections import Counter
 from scipy.optimize import curve_fit
 
-
+import networkx as nx
 
 if int(sys.argv[1])==0:
     if not os.path.exists("./res"):
         os.mkdir("./res")
         os.mkdir("./figs")
 
-
 def linear_fit(x, a, b):
     return a * x + b
 
-def gini2(y):
-    y.sort()
-    n = len(y)
-    nume = 0
-    for i in range(n):
-        nume = nume + (i+1)*y[i]
-
-    deno = n*sum(y)
-    return ((2*nume)/deno - (n+1)/(n))*(n/(n-1))
-
-# class State:
-#     def __init__(self, families):
-#         self.families = families
-#         self.network = np.ones([num_families, num_families])
-#         # self.df = pd.DataFrame()
-
 class Family:
-    def __init__(self, family_id,  wealth):
+    def __init__(self, family_id,  wealth, debt, subordinates):
         self.family_id = family_id
         self.wealth = wealth
-        self.debt = []
-        self.subordinates = []
+        self.debt = debt
+        self.subordinates = subordinates
+        self.give = 0
         self.score = 0
-        # self.lifetime = 0
 
 def generation(families, network):
+    family_ids_ = list(range(num_families))
     family_ids = list(range(num_families))
     random.shuffle(family_ids)
     donation_ls = []
+    # recipient_id_ls = random.choices(family_ids, k = num_families)
     for doner_id in family_ids:
         doner = families[doner_id]
-        if doner.wealth > 0:
-            recipient_id = random.choices(list(range(num_families)), weights = network[:, doner_id], k= 1)[0]
+        if len(doner.debt) == 0:
+            recipient_id = random.choices(family_ids_, weights = network[:, doner_id], k= 1)[0]
+            # recipient_id = recipient_id_ls[doner_id]
             if doner_id != recipient_id:
                 recipient = families[recipient_id]
-                recipient.debt.append([doner, doner.wealth * r])
-                network[recipient_id, doner_id] += 1
-                recipient.score += 1
-                donation_ls.append([recipient_id, doner_id])
+                if recipient not in doner.subordinates:
+                    # recipient.wealth +=  doner.wealth
+                    recipient.debt.append([doner, doner.wealth * r])
+                    doner.give = doner.wealth
+                    doner.wealth = 0
+                    recipient.score += 1 / l
+                    network[recipient_id, doner_id] += 1
+                    donation_ls.append([recipient_id, doner_id])
 
     for family in families:
-        family.wealth += 1
+        # family.wealth += (1 + math.log(1 + family.wealth))
+        family.wealth += 1 / l
+        # family.wealth += family.give - family.given
+        family.wealth += family.give
+        family.give = 0
+        # family.given = 0
 
     random.shuffle(family_ids)
     for family_id in family_ids:
         family = families[family_id]
-        count = 0
-        # random.shuffle(family.debt)
-        for debt in family.debt:
-            owner = debt[0]
-            debt_wealth = debt[1]
-            if family not in owner.subordinates and [family.family_id, owner.family_id] not in donation_ls:
-                count += 1
-                continue
-            elif family.wealth >= debt_wealth:
-                owner.wealth += debt_wealth
-                if family in owner.subordinates:
-                    owner.subordinates.remove(family)
-                family.wealth -= debt_wealth
-                network[owner.family_id, family_id] += 1
-                owner.score += 1
-                count += 1
-            else:
-                owner.wealth += family.wealth
-                debt[1] -= family.wealth
-                family.wealth = 0
-                network[owner.family_id, family_id] += 1
-                owner.score += 1
-        family.debt = family.debt[count:]
-        for debt in family.debt:
-            owner = debt[0]
-            if not family in owner.subordinates:
-                owner.subordinates.append(family)
+        if len(family.debt) > 0:
+            count = 0
+            remove_ls = []
+            random.shuffle(family.debt)
+            for debt in family.debt:
+                owner = debt[0]
+                debt_wealth = debt[1]
+                if family not in owner.subordinates and [family.family_id, owner.family_id] not in donation_ls:
+                    remove_ls.append(debt)
+                    continue
+                elif family.wealth >= debt_wealth:
+                    owner.wealth += debt_wealth
+                    if family in owner.subordinates:
+                        owner.subordinates.remove(family)
+                    family.wealth -= debt_wealth
+                    # owner.score += 1 / l / len(family.debt)
+                    owner.score += 1 / l
+                    network[owner.family_id, family_id] += 1
+                    remove_ls.append(debt)
+                else:
+                    owner.wealth += family.wealth
+                    debt[1] -= family.wealth
+                    family.wealth = 0
+                    # owner.score += 1 / l / len(family.debt)
+                    owner.score += 1 / l
+                    network[owner.family_id, family_id] += 1
+            for removed in remove_ls:
+                family.debt.remove(removed)
+            for debt in family.debt:
+                owner = debt[0]
+                if not family in owner.subordinates:
+                    owner.subordinates.append(family)
 
-    # wealths = [family.wealth for family in families]
-    # scores = np.sum(network, axis = 1) - num_families
-    wealths, scores = [], []
+    wealths = [family.wealth for family in families]
+    scores = [family.score for family in families]
+    wealths = sorted(wealths)
+    wealth_ratio = wealths[-1] / wealths[-2]
+    top_wealth = wealths[-1]
+    # top_wealth = len([0 for family in families if len(family.debt) > 0]) / num_families
+    wealths = []
+    scores = []
 
     for family in families:
-        # family.lifetime += 1
         if random.random() < 1 / l:
             wealths.append(family.wealth)
-            # scores.append(family.score)
-            scores.append(np.sum(network[family.family_id, :]) - num_families)
-            family.wealth = 0.0
+            scores.append(family.score)
+            family.wealth = 1 / l
             family.score = 0
-            # family.lifetime = 0
             family.debt = []
             family.subordinates = []
             network[family.family_id, :] = 1
             network[:, family.family_id] = 1
 
-    return families, network, wealths, scores
+    return families, network,  wealths, scores, wealth_ratio, top_wealth
 
-np.sum(network, axis = 1) - num_families
-[family.score for family in families]
-sum(network[0])
-
-scores
-for family in families:
-    print(family.wealth, len(family.subordinates))
 
 def mean(x):
     if len(x) > 0:
@@ -128,64 +123,74 @@ def mean(x):
     else:
         return 0
 
-
-
 def main():
-    families = [Family(i,  0.0) for i in range(num_families)]
+    families = [Family(i,  1 / l,  [], []) for i in range(num_families)]
     network = np.ones([num_families, num_families])
 
     # independent_duration_res, subordinate_duration_res, rich_duration_res = [], [], []
-    wealth_ls, score_ls = [], []
+    wealth_ls, score_ls, wealth_ratio_ls, top_wealth_ls = [], [], [], []
     tot_wealth, tot_score = [], []
     iter = 0
     while iter < iteration:
         # print(iter)
-        families, network, wealths, scores = generation(families, network)
+        families, network,  wealths, scores, wealth_ratio, top_wealth = generation(families, network)
         tot_wealth.append(sum(wealths))
         tot_score.append(sum(scores))
         iter += 1
-        if iter >= iteration * 0.9:
+        if iter >= iteration * 0.1:
             wealth_ls.extend(wealths)
             score_ls.extend(scores)
+            wealth_ratio_ls.append(wealth_ratio)
+            top_wealth_ls.append(top_wealth)
 
+    wealths = [family.wealth for family in families]
+    nearest_wealths = []
+    for i in range(num_families):
+        j = np.argmax(network[:, i])
+        nearest_wealths.append([wealths[i], wealths[j]])
 
-    # iter = 0
-    # while iter < iteration:
-    #     families, network, wealths, scores = generation(families, network)
-    #     iter += 1
-    #     wealth_ls.extend(wealths)
-    #     score_ls.extend(scores)
+    nearest_wealths = np.array(nearest_wealths)
+    nearest_corr = np.corrcoef(nearest_wealths.T)[0, 1]
 
-    if iter == iteration and trial < 3:
+    if iter == iteration:
         try:
-            fig = plt.figure()
-            ax = fig.add_subplot(1,1,1)
-            # ax.plot(np.arange(int(iteration * 0.9) - 1, iteration, 1), tot_wealth)
-            ax.plot(tot_wealth)
-            ax.set_xlabel("total wealth",fontsize=24)
-            # ax.set_ylabel(r"$\lambda_i$",fontsize=18)
-            # ax.set_ylim(-0.1,1.5)
-            ax.tick_params(labelsize=18)
-            fig.tight_layout()
-            fig.savefig(f"figs/{path}_{trial}_tot_wealth.pdf")
-            plt.close('all')
+            statuses_c = []
+            for family in families:
+                if len(family.debt) == 0:
+                    statuses_c.append("b")
+                else:
+                    statuses_c.append("m")
+
+            cur_connection = 1 * (network > network.mean(axis = 0) + network.var(axis = 0) ** (1/2))
+            # cur_connection = 1 * (connection > 0.08)
+            df = pd.DataFrame(cur_connection)
+            G = nx.from_pandas_adjacency(df.T, create_using=nx.DiGraph())
+            remove_ls = []
+            count = 0
+            for v in G:
+                G_deg=G.degree(v)
+                if G_deg==0:
+                    remove_ls.append(v)
+                    statuses_c.remove(statuses_c[count])
+                count += 1
+            for v in remove_ls:
+                G.remove_node(v)
 
             fig = plt.figure()
             ax = fig.add_subplot(1,1,1)
-            ax.plot(tot_score)
-            ax.set_xlabel("total score",fontsize=24)
+            nx.draw_networkx(G, node_size = 30, with_labels=False, ax = ax, node_color = statuses_c)
             # ax.set_ylabel(r"$\lambda_i$",fontsize=18)
             # ax.set_ylim(-0.1,1.5)
             ax.tick_params(labelsize=18)
             fig.tight_layout()
-            fig.savefig(f"figs/{path}_{trial}_tot_score.pdf")
+            fig.savefig(f"figs/{path}_{trial}_network.pdf")
             plt.close('all')
 
             weights = np.ones(len(wealth_ls)) / len(wealth_ls)
             fig = plt.figure()
             ax = fig.add_subplot(1,1,1)
             # ax.hist(wealth_ls, bins = 50, density = 1)
-            ax.hist(wealth_ls, bins = 50, weights = weights)
+            ax.hist(wealth_ls, bins = partition, weights = weights)
             ax.set_xlabel("wealth",fontsize=24)
             ax.set_yscale('log')
             plt.xticks(rotation=45)
@@ -209,10 +214,12 @@ def main():
             # fig.savefig(f"figs/{path}_{trial}_wealth_log_exp.pdf")
             # plt.close('all')
 
+            wealth_ls = np.array(wealth_ls)
+            density = len(wealth_ls[wealth_ls > 1]) / len(wealth_ls)
             max_val = max(10, np.max(wealth_ls))
             fig = plt.figure()
             ax = fig.add_subplot(1,1,1)
-            ax.hist(wealth_ls, bins = np.logspace(0, np.log10(np.max(wealth_ls)), 50), weights = weights)
+            ax.hist(wealth_ls, bins = np.logspace(0, np.log10(np.max(wealth_ls)), partition), density = density)
             ax.set_xlabel("wealth",fontsize=24)
             ax.set_xscale('log')
             ax.set_yscale('log')
@@ -224,13 +231,30 @@ def main():
             fig.savefig(f"figs/{path}_{trial}_wealth_log_log.pdf")
             plt.close('all')
 
+            # weights = np.ones(len(wealth_ls[wealth_ls > 1])) / len(wealth_ls)
+            max_val = max(10, np.max(wealth_ls))
+            fig = plt.figure()
+            ax = fig.add_subplot(1,1,1)
+            ax.hist(wealth_ls, bins = np.logspace(0, np.log10(np.max(wealth_ls)), partition),weights = weights)
+            ax.set_xlabel("wealth",fontsize=24)
+            ax.set_xscale('log')
+            ax.set_yscale('log')
+            ax.set_xlim(1, max_val + 10)
+            # ax.set_ylabel(r"$\lambda_i$",fontsize=18)
+            # ax.set_ylim(-0.1,1.5)
+            ax.tick_params(labelsize=22)
+            fig.tight_layout()
+            fig.savefig(f"figs/{path}_{trial}_wealth_log_log2.pdf")
+            plt.close('all')
+
             sx = sorted(wealth_ls)[::-1]
+            sx = np.array(sx)
             N = len(wealth_ls)
             sy = [i/N for i in range(N)]
 
             fig = plt.figure()
             ax = fig.add_subplot(1,1,1)
-            ax.plot(sx, sy)
+            ax.plot(sx[int(len(sx) * 0.001):], sy[int(len(sy) * 0.001):])
             ax.set_xlabel("wealth",fontsize=24)
             ax.set_yscale('log')
             plt.xticks(rotation=45)
@@ -241,12 +265,15 @@ def main():
             fig.savefig(f"figs/{path}_{trial}_wealth_log_CDF.pdf")
             plt.close('all')
 
+            x_min = max(max(sx[sx > 0][-1] * 0.9, sx[int(len(sx) / 2)]), 1e-02)
+
             fig = plt.figure()
             ax = fig.add_subplot(1,1,1)
             ax.plot(sx, sy)
             ax.set_xlabel("wealth",fontsize=24)
             ax.set_xscale('log')
             ax.set_yscale('log')
+            ax.set_xlim(x_min, sx[0] + 1)
             # ax.set_ylabel(r"$\lambda_i$",fontsize=18)
             # ax.set_ylim(-0.1,1.5)
             ax.tick_params(labelsize=18)
@@ -256,7 +283,7 @@ def main():
 
             fig = plt.figure()
             ax = fig.add_subplot(1,1,1)
-            ax.hist(score_ls, bins = 50, weights = weights)
+            ax.hist(score_ls, bins = partition, weights = weights)
             ax.set_xlabel("score",fontsize=24)
             ax.set_yscale('log')
             plt.xticks(rotation=45)
@@ -280,10 +307,12 @@ def main():
             # fig.savefig(f"figs/{path}_{trial}_score_log_exp.pdf")
             # plt.close('all')
 
+            score_ls = np.array(score_ls)
+            density = len(score_ls[score_ls > 1]) / len(score_ls)
             max_val = max(1, np.max(score_ls))
             fig = plt.figure()
             ax = fig.add_subplot(1,1,1)
-            ax.hist(score_ls, bins = np.logspace(0, np.log10(np.max(score_ls)), 50), weights = weights)
+            ax.hist(score_ls, bins = np.logspace(0, np.log10(np.max(score_ls)), partition), density = density)
             ax.set_xlabel("score",fontsize=24)
             ax.set_xscale('log')
             ax.set_yscale('log')
@@ -295,13 +324,31 @@ def main():
             fig.savefig(f"figs/{path}_{trial}_score_log_log.pdf")
             plt.close('all')
 
+            # weights = np.ones(len(score_ls[score_ls > 1])) / len(score_ls)
+            max_val = max(10, np.max(score_ls))
+            fig = plt.figure()
+            ax = fig.add_subplot(1,1,1)
+            ax.hist(score_ls, bins = np.logspace(0, np.log10(np.max(score_ls)), partition),weights = weights)
+            ax.set_xlabel("score",fontsize=24)
+            ax.set_xscale('log')
+            ax.set_yscale('log')
+            ax.set_xlim(1, max_val + 10)
+            # ax.set_ylabel(r"$\lambda_i$",fontsize=18)
+            # ax.set_ylim(-0.1,1.5)
+            ax.tick_params(labelsize=22)
+            fig.tight_layout()
+            fig.savefig(f"figs/{path}_{trial}_score_log_log2.pdf")
+            plt.close('all')
+
             sx = sorted(score_ls)[::-1]
+            sx = np.array(sx)
             N = len(score_ls)
             sy = [i/N for i in range(N)]
 
+
             fig = plt.figure()
             ax = fig.add_subplot(1,1,1)
-            ax.plot(sx, sy)
+            ax.plot(sx[int(len(sx) * 0.001):], sy[int(len(sy) * 0.001):])
             ax.set_xlabel("score",fontsize=24)
             ax.set_yscale('log')
             plt.xticks(rotation=45)
@@ -312,12 +359,15 @@ def main():
             fig.savefig(f"figs/{path}_{trial}_score_log_CDF.pdf")
             plt.close('all')
 
+            x_min = max(max(sx[sx > 0][-1] * 0.9, sx[int(len(sx) / 2)]), 1e-02)
+
             fig = plt.figure()
             ax = fig.add_subplot(1,1,1)
             ax.plot(sx, sy)
             ax.set_xlabel("score",fontsize=24)
             ax.set_xscale('log')
             ax.set_yscale('log')
+            ax.set_xlim(x_min, sx[0] + 1)
             # ax.set_ylabel(r"$\lambda_i$",fontsize=18)
             # ax.set_ylim(-0.1,1.5)
             ax.tick_params(labelsize=18)
@@ -331,54 +381,130 @@ def main():
         wealth_exp_10pc, wealth_power_10pc, wealth_phase_10pc = np.nan, np.nan, np.nan
         score_exp_10pc, score_power_10pc, score_phase_10pc = np.nan, np.nan, np.nan
         try:
+            wealth_sizes = sorted(wealth_ls)[::-1]
+            N = len(wealth_ls)
+            sy = [(i + 1) / N for i in range(N)][int(len(wealth_sizes) * 0.001): int(len(wealth_sizes) * 0.1)]
+            sizes = np.array(wealth_sizes[int(len(wealth_sizes) * 0.001): int(len(wealth_sizes) * 0.1)])
+            param, cov = curve_fit(linear_fit, sizes, np.log(sy))
+            wealth_exp_10pc = - 1 / param[0]
+            predict = np.exp(sizes * param[0])
+            mse_exp = np.mean((sy / np.sum(sy) - predict / np.sum(predict)) ** 2)
+
+            sizes_ = np.where(sizes == 0, sizes[sizes > 0].min(), sizes)
+            param, cov = curve_fit(linear_fit, np.log(sizes_), np.log(sy))
+            wealth_power_10pc = - param[0] + 1
+            predict = sizes_ ** (param[0])
+            mse_power = np.mean((sy / np.sum(sy) - predict / np.sum(predict)) ** 2)
+            wealth_phase_10pc = math.log(mse_exp / mse_power)
+        except:
+            pass
+
+        try:
+            score_sizes = sorted(score_ls)[::-1]
+            N = len(score_ls)
+            sy = [(i + 1) / N for i in range(N)][int(len(score_sizes) * 0.001): int(len(score_sizes) * 0.1)]
+            sizes = np.array(score_sizes[int(len(score_sizes) * 0.001): int(len(score_sizes) * 0.1)])
+            param, cov = curve_fit(linear_fit, sizes, np.log(sy))
+            score_exp_10pc = - 1 / param[0]
+            predict = np.exp(sizes * param[0])
+            mse_exp = np.mean((sy / np.sum(sy) - predict / np.sum(predict)) ** 2)
+
+            param, cov = curve_fit(linear_fit, np.log(sizes), np.log(sy))
+            score_power_10pc = - param[0] + 1
+            predict = sizes ** (param[0])
+            mse_power = np.mean((sy / np.sum(sy) - predict / np.sum(predict)) ** 2)
+            score_phase_10pc = math.log(mse_exp / mse_power)
+        except:
+            pass
+
+        wealth_exp_30pc, wealth_power_30pc, wealth_phase_30pc = np.nan, np.nan, np.nan
+        score_exp_30pc, score_power_30pc, score_phase_30pc = np.nan, np.nan, np.nan
+        try:
+            wealth_sizes = sorted(wealth_ls)[::-1]
+            N = len(wealth_ls)
+            sy = [(i + 1) / N for i in range(N)][int(len(wealth_sizes) * 0.001): int(len(wealth_sizes) * 0.3)]
+            sizes = np.array(wealth_sizes[int(len(wealth_sizes) * 0.001): int(len(wealth_sizes) * 0.3)])
+            param, cov = curve_fit(linear_fit, sizes, np.log(sy))
+            wealth_exp_30pc = - 1 / param[0]
+            predict = np.exp(sizes * param[0])
+            mse_exp = np.mean((sy / np.sum(sy) - predict / np.sum(predict)) ** 2)
+
+            sizes_ = np.where(sizes == 0, sizes[sizes > 0].min(), sizes)
+            param, cov = curve_fit(linear_fit, np.log(sizes_), np.log(sy))
+            wealth_power_30pc = - param[0] + 1
+            predict = sizes_ ** (param[0])
+            mse_power = np.mean((sy / np.sum(sy) - predict / np.sum(predict)) ** 2)
+            wealth_phase_30pc = math.log(mse_exp / mse_power)
+        except:
+            pass
+
+        try:
+            score_sizes = sorted(score_ls)[::-1]
+            N = len(score_ls)
+            sy = [(i + 1) / N for i in range(N)][int(len(score_sizes) * 0.001): int(len(score_sizes) * 0.3)]
+            sizes = np.array(score_sizes[int(len(score_sizes) * 0.001): int(len(score_sizes) * 0.3)])
+            param, cov = curve_fit(linear_fit, sizes, np.log(sy))
+            score_exp_30pc = - 1 / param[0]
+            predict = np.exp(sizes * param[0])
+            mse_exp = np.mean((sy / np.sum(sy) - predict / np.sum(predict)) ** 2)
+
+            param, cov = curve_fit(linear_fit, np.log(sizes), np.log(sy))
+            score_power_30pc = - param[0] + 1
+            predict = sizes ** (param[0])
+            mse_power = np.mean((sy / np.sum(sy) - predict / np.sum(predict)) ** 2)
+            score_phase_30pc = math.log(mse_exp / mse_power)
+
+        except:
+            pass
+
+        wealth_exp_10pc_pdf, wealth_power_10pc_pdf, wealth_phase_10pc_pdf = np.nan, np.nan, np.nan
+        score_exp_10pc_pdf, score_power_10pc_pdf, score_phase_10pc_pdf = np.nan, np.nan, np.nan
+
+        try:
             wealth_sizes = np.array(wealth_ls)
             wealth_sizes.sort()
-            sizes = wealth_sizes[::-1][int(len(wealth_sizes) * 0.001): int(len(wealth_sizes) * 0.1)]
+            sizes = wealth_sizes[::-1][int(len(wealth_sizes) * 0.001): int(len(wealth_sizes) * 0.2)]
             # wealths = np.log(sizes)
             wealths = sizes
             (val, bins)  = np.histogram(wealths)
             bins = (bins[1:] + bins[:-1]) / 2
             param, cov = curve_fit(linear_fit, bins, np.log(val))
-            wealth_exp_10pc = - 1 / param[0]
+            wealth_exp_10pc_pdf = - 1 / param[0]
             predict = np.exp(bins * param[0])
             mse_exp = np.mean((val / np.sum(val) - predict / np.sum(predict)) ** 2)
 
             param, cov = curve_fit(linear_fit, np.log(bins), np.log(val))
-            wealth_power_10pc = - param[0]
+            wealth_power_10pc_pdf = - param[0]
             predict = bins ** (param[0])
             mse_power = np.mean((val / np.sum(val) - predict / np.sum(predict)) ** 2)
-            wealth_phase_10pc = math.log(mse_exp / mse_power)
-
-            sx = sorted(wealth_ls)[::-1]
-            N = len(wealth_ls)
-            sy = [i/N for i in range(N)]
+            wealth_phase_10pc_pdf = math.log(mse_exp / mse_power)
         except:
             pass
 
         try:
             score_sizes = np.array(score_ls)
             score_sizes.sort()
-            sizes = score_sizes[::-1][int(len(score_sizes) * 0.001): int(len(score_sizes) * 0.1)]
+            sizes = score_sizes[::-1][int(len(score_sizes) * 0.001): int(len(score_sizes) * 0.2)]
             # scores = np.log(sizes)
             scores = sizes
             (val, bins)  = np.histogram(scores)
             bins = (bins[1:] + bins[:-1]) / 2
             param, cov = curve_fit(linear_fit, bins, np.log(val))
-            score_exp_10pc = - 1 / param[0]
+            score_exp_10pc_pdf = - 1 / param[0]
             predict = np.exp(bins * param[0])
             mse_exp = np.mean((val / np.sum(val) - predict / np.sum(predict)) ** 2)
 
             param, cov = curve_fit(linear_fit, np.log(bins), np.log(val))
-            score_power_10pc = - param[0]
+            score_power_10pc_pdf = - param[0]
             predict = bins ** (param[0])
             mse_power = np.mean((val / np.sum(val) - predict / np.sum(predict)) ** 2)
-            score_phase_10pc = math.log(mse_exp / mse_power)
+            score_phase_10pc_pdf = math.log(mse_exp / mse_power)
 
         except:
             pass
 
-        wealth_exp_30pc, wealth_power_30pc, wealth_phase_30pc = np.nan, np.nan, np.nan
-        score_exp_30pc, score_power_30pc, score_phase_30pc = np.nan, np.nan, np.nan
+        wealth_exp_30pc_pdf, wealth_power_30pc_pdf, wealth_phase_30pc_pdf = np.nan, np.nan, np.nan
+        score_exp_30pc_pdf, score_power_30pc_pdf, score_phase_30pc_pdf = np.nan, np.nan, np.nan
         try:
             wealth_sizes = np.array(wealth_ls)
             wealth_sizes.sort()
@@ -388,15 +514,15 @@ def main():
             (val, bins)  = np.histogram(wealths)
             bins = (bins[1:] + bins[:-1]) / 2
             param, cov = curve_fit(linear_fit, bins, np.log(val))
-            wealth_exp_30pc = - 1 / param[0]
+            wealth_exp_30pc_pdf = - 1 / param[0]
             predict = np.exp(bins * param[0])
             mse_exp = np.mean((val / np.sum(val) - predict / np.sum(predict)) ** 2)
 
             param, cov = curve_fit(linear_fit, np.log(bins), np.log(val))
-            wealth_power_30pc = - param[0]
+            wealth_power_30pc_pdf = - param[0]
             predict = bins ** (param[0])
             mse_power = np.mean((val / np.sum(val) - predict / np.sum(predict)) ** 2)
-            wealth_phase_30pc = math.log(mse_exp / mse_power)
+            wealth_phase_30pc_pdf = math.log(mse_exp / mse_power)
         except:
             pass
 
@@ -409,15 +535,15 @@ def main():
             (val, bins)  = np.histogram(scores)
             bins = (bins[1:] + bins[:-1]) / 2
             param, cov = curve_fit(linear_fit, bins, np.log(val))
-            score_exp_30pc = - 1 / param[0]
+            score_exp_30pc_pdf = - 1 / param[0]
             predict = np.exp(bins * param[0])
             mse_exp = np.mean((val / np.sum(val) - predict / np.sum(predict)) ** 2)
 
             param, cov = curve_fit(linear_fit, np.log(bins), np.log(val))
-            score_power_30pc = - param[0]
+            score_power_30pc_pdf = - param[0]
             predict = bins ** (param[0])
             mse_power = np.mean((val / np.sum(val) - predict / np.sum(predict)) ** 2)
-            score_phase_30pc = math.log(mse_exp / mse_power)
+            score_phase_30pc_pdf = math.log(mse_exp / mse_power)
 
         except:
             pass
@@ -426,33 +552,50 @@ def main():
         try:
             wealth_dev_mean = np.std(wealth_ls) / np.mean(wealth_ls)
             score_dev_mean = np.std(score_ls) / np.mean(score_ls)
+            pop_wealth = wealth_sizes[int(len(wealth_sizes) * 0.01):]
+            wealth_dev_mean_pop = np.std(pop_wealth) / np.mean(pop_wealth)
+            pop_score = score_sizes[int(len(score_sizes) * 0.01):]
+            score_dev_mean_pop = np.std(pop_score) / np.mean(pop_score)
+
         except:
             wealth_dev_mean, score_dev_mean = 0, 0
 
+            # wealth_ls = np.array(wealth_ls)
+            # score_ls = np.array(score_ls)
+            # wealth_ls_ = wealth_ls[wealth_ls > 0]
+            # score_ls_ = score_ls[score_ls > 1]
+            # wealth_dev_mean_ = np.std(wealth_ls_) / np.mean(wealth_ls_)
+            # score_dev_mean_ = np.std(score_ls_) / np.mean(score_ls_)
+            # print(wealth_dev_mean, score_dev_mean, wealth_dev_mean_, score_dev_mean_)
+            # len(score_ls[score_ls < 1])
 
+    wealth_ratio = np.mean(np.array(wealth_ratio_ls))
+    top_wealth = np.mean(np.array(top_wealth_ls))
 
-    res = [wealth_dev_mean, score_dev_mean, wealth_exp_10pc, wealth_power_10pc, wealth_phase_10pc, score_exp_10pc, score_power_10pc, score_phase_10pc, wealth_exp_30pc, wealth_power_30pc, wealth_phase_30pc, score_exp_30pc, score_power_30pc, score_phase_30pc]
+    res = [nearest_corr, wealth_dev_mean, score_dev_mean, wealth_dev_mean_pop, score_dev_mean_pop, wealth_ratio, top_wealth, wealth_exp_10pc, wealth_power_10pc, wealth_phase_10pc, score_exp_10pc, score_power_10pc, score_phase_10pc, wealth_exp_30pc, wealth_power_30pc, wealth_phase_30pc, score_exp_30pc, score_power_30pc, score_phase_30pc, wealth_exp_10pc_pdf, wealth_power_10pc_pdf, wealth_phase_10pc_pdf, score_exp_10pc_pdf, score_power_10pc_pdf, score_phase_10pc_pdf, wealth_exp_30pc_pdf, wealth_power_30pc_pdf, wealth_phase_30pc_pdf, score_exp_30pc_pdf, score_power_30pc_pdf, score_phase_30pc_pdf]
 
     return res
 
+num_families = 100
+iteration = 10000
+iteration = 1000000
+trial = 0
+l = 5000
+trial = 0
+r = 0.3
+
+# for r in [0.003, 0.03, 0.3, 0.5]:
+#     path = f"{num_families}fam_interest{round(r * 1000)}pm_{l}exchange"
+#     print(main())
 # res
 
-num_families = 300
-iteration = 30000
-iteration = 10000
-trial = 1
-l = 300
-trial = 2
-r = 0.3
-eta = 1 / num_families
-
-
-r = [[0.003, 0.005], [0.01, 0.02], [0.03, 0.05], [0.3, 0.002], [0.2, 0.1]][int(sys.argv[1]) // 5][int(sys.argv[2])]
-# r = [0.3, 0.5][int(sys.argv[2])]
-for l in [[3, 5, 80, 10000], [10, 20, 70, 5000], [30, 50, 1000, 4000], [100, 200, 8, 2000], [300, 500, 7, 3000]][int(sys.argv[1]) % 5]:
-    df_res = pd.DataFrame(index = ["exchange", "interest", "num_families", "wealth_gini", "score_gini", "wealth_exp_5pc", "wealth_power_5pc", "wealth_phase_5pc", "score_exp_5pc", "score_power_5pc", "score_phase_5pc", "wealth_exp_10pc", "wealth_power_10pc", "wealth_phase_10pc", "score_exp_10pc", "score_power_10pc", "score_phase_10pc", "wealth_exp_30pc", "wealth_power_30pc", "wealth_phase_30pc", "score_exp_30pc", "score_power_30pc", "score_phase_30pc"])
-    path = f"{num_families}fam_interest{round(r * 1000)}pm_{l}exchange"
-    for trial in range(5):
+# r = [[0.003, 0.005], [0.01, 0.02], [0.03, 0.05], [0.3, 0.5], [0.2, 0.1]][int(sys.argv[1]) // 5][int(sys.argv[2])]
+r = [0.1, 0.2, 0.3, 0.5][int(sys.argv[1]) % 4]
+l = [3000, 5000, 10000, 20000, 30000, 50000][int(sys.argv[1]) // 4]
+df_res = pd.DataFrame(index = ["exchange", "interest", "num_families", "nearest corr.", "wealth_gini", "score_gini", "wealth_gini2", "score_gini2", "wealth_ratio", "top_wealth", "wealth_exp_10pc", "wealth_power_10pc", "wealth_phase_10pc", "score_exp_10pc", "score_power_10pc", "score_phase_10pc", "wealth_exp_30pc", "wealth_power_30pc", "wealth_phase_30pc", "score_exp_30pc", "score_power_30pc", "score_phase_30pc", "wealth_exp_10pc_pdf", "wealth_power_10pc_pdf", "wealth_phase_10pc_pdf", "score_exp_10pc_pdf", "score_power_10pc_pdf", "score_phase_10pc_pdf", "wealth_exp_30pc_pdf", "wealth_power_30pc_pdf", "wealth_phase_30pc_pdf", "score_exp_30pc_pdf", "score_power_30pc_pdf", "score_phase_30pc_pdf"])
+path = f"{num_families}fam_r{round(r * 10000)}pm_{l}exchange"
+if not os.path.exists(f"res/res_{path}.csv"):
+    for trial in range(10):
         try:
             res = main()
             params = [l, r, num_families]
